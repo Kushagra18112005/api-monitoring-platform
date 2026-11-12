@@ -1,0 +1,9 @@
+import express from "express";import {z} from "zod";export const app=express();app.use(express.json());
+type Check={at:string;status:number;latencyMs:number;ok:boolean};type Monitor={id:string;name:string;url:string;checks:Check[]};
+const monitors=new Map<string,Monitor>();const schema=z.object({name:z.string().min(1),url:z.string().url().refine(s=>new URL(s).protocol==="https:","HTTPS required")});
+app.get("/health",(_q,r)=>r.json({ok:true}));
+app.post("/api/monitors",(q,r)=>{const p=schema.safeParse(q.body);if(!p.success)return r.status(400).json({error:"Invalid monitor"});const m:Monitor={id:crypto.randomUUID(),...p.data,checks:[]};monitors.set(m.id,m);return r.status(201).json(m)});
+app.get("/api/monitors",(_q,r)=>r.json([...monitors.values()].map(({checks,...m})=>({...m,totalChecks:checks.length}))));
+app.get("/api/monitors/:id/stats",(q,r)=>{const m=monitors.get(q.params.id);if(!m)return r.status(404).json({error:"Not found"});const checks=m.checks;return r.json({count:checks.length,uptimePercent:checks.length?100*checks.filter(x=>x.ok).length/checks.length:null,averageLatencyMs:checks.length?Math.round(checks.reduce((a,b)=>a+b.latencyMs,0)/checks.length):null,latest:checks.at(-1)||null})});
+app.post("/api/monitors/:id/check",async(q,r)=>{const m=monitors.get(q.params.id);if(!m)return r.status(404).json({error:"Not found"});const start=performance.now();let status=0,ok=false;try{const response=await fetch(m.url,{method:"HEAD",redirect:"error",signal:AbortSignal.timeout(5000)});status=response.status;ok=response.ok}catch{}const check={at:new Date().toISOString(),status,ok,latencyMs:Math.round(performance.now()-start)};m.checks.push(check);if(m.checks.length>100)m.checks.shift();return r.json(check)});
+if(process.env.NODE_ENV!=="test")app.listen(Number(process.env.PORT)||3000);
